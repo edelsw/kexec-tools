@@ -78,10 +78,12 @@ int elf_mips_load(int argc, char **argv, const char *buf, off_t len,
 	unsigned long cmdline_addr;
 	size_t i;
 	off_t dtb_length;
+	off_t dtb_base;
 	char *dtb_buf;
 	char *initrd_buf = NULL;
 	unsigned long long kernel_addr = 0, kernel_size = 0;
 	unsigned long pagesize = getpagesize();
+	unsigned long dtb_gap_size = 0;
 
 	/* Need to append some command line parameters internally in case of
 	 * taking crash dumps.
@@ -149,9 +151,19 @@ int elf_mips_load(int argc, char **argv, const char *buf, off_t len,
 
 	if (arch_options.dtb_file) {
 		dtb_buf = slurp_file(arch_options.dtb_file, &dtb_length);
+		if (arch_options.command_line)
+			dtb_set_bootargs(&dtb_buf, &dtb_length, cmdline_buf + strlen(CMDLINE_PREFIX));
 	} else {
 		create_flatten_tree(&dtb_buf, &dtb_length, cmdline_buf + strlen(CMDLINE_PREFIX));
 	}
+
+	if (!arch_options.initrd_file) {
+		/* MIPS bootmem_init() allocates bitmap after kernel end
+		 * if initrd is not present. Add a gap for low memory (512KB)
+		 * at 4k-pages. */
+		dtb_gap_size += 0x4000;
+	}
+	dtb_base = _ALIGN_UP(kernel_addr + kernel_size + dtb_gap_size, pagesize);
 
 	if (arch_options.initrd_file) {
 		initrd_buf = slurp_file(arch_options.initrd_file, &initrd_size);
@@ -162,7 +174,7 @@ int elf_mips_load(int argc, char **argv, const char *buf, off_t len,
 
 		initrd_base = add_buffer(info, initrd_buf, initrd_size,
 					initrd_size, sizeof(void *),
-					_ALIGN_UP(kernel_addr + kernel_size + dtb_length,
+					_ALIGN_UP(dtb_base + dtb_length,
 						pagesize), 0x0fffffff, 1);
 
 		/* Now that the buffer for initrd is prepared, update the dtb
@@ -178,8 +190,7 @@ int elf_mips_load(int argc, char **argv, const char *buf, off_t len,
 			cmdline_addr, 0x0fffffff, 1);
 
 	add_buffer(info, dtb_buf, dtb_length, dtb_length, 0,
-		_ALIGN_UP(kernel_addr + kernel_size, pagesize),
-		0x0fffffff, 1);
+		dtb_base, 0x0fffffff, 1);
 
 	return 0;
 }
